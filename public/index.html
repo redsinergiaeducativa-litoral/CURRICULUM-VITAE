@@ -802,7 +802,7 @@ new TextRun({ children:[PageNumber.CURRENT], size:18, font:'Arial', color:'88888
 ]}) ]
 });
 }
-function dataUrlToImageRun(dataUrl, size){
+function dataUrlToImageRun(dataUrl, maxSize){
 try{
 const match = dataUrl.match(/^data:image\/(\w+);base64,(.*)$/);
 if(!match) return null;
@@ -813,8 +813,24 @@ const base64 = match[2];
 const raw = atob(base64);
 const bytes = new Uint8Array(raw.length);
 for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
-return new ImageRun({ data:bytes, type:ext, transformation:{ width:size, height:size } });
+return { bytes, ext };
 }catch(e){ return null; }
+}
+function getImageNaturalSize(dataUrl){
+return new Promise(resolve=>{
+const img = new Image();
+img.onload = ()=> resolve({ w: img.naturalWidth||1, h: img.naturalHeight||1 });
+img.onerror = ()=> resolve({ w:1, h:1 });
+img.src = dataUrl;
+});
+}
+async function buildFotoImageRun(dataUrl, maxSize){
+const parsed = dataUrlToImageRun(dataUrl);
+if(!parsed) return null;
+const { w, h } = await getImageNaturalSize(dataUrl);
+const scale = Math.min(maxSize/w, maxSize/h);
+const width = Math.round(w*scale), height = Math.round(h*scale);
+return new ImageRun({ data:parsed.bytes, type:parsed.ext, transformation:{ width, height } });
 }
 
 function buildFormalDocxChildren(){
@@ -1010,10 +1026,10 @@ c.innerHTML = `
 </div>`;
 document.getElementById('bio-preview-doc').innerHTML = buildBiodataHTML();
 }
-function buildBiodataDocxChildren(){
+async function buildBiodataDocxChildren(){
 const children = [];
 if(biodataState.foto){
-const img = dataUrlToImageRun(biodataState.foto, 110);
+const img = await buildFotoImageRun(biodataState.foto, 130);
 if(img){ children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing:{after:100}, children:[img] })); }
 }
 children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing:{after:160}, children:[ new TextRun({text: biodataState.nombre||'', bold:true, size:32, font:'Arial', color:'8A4A1F'}) ] }));
@@ -1042,7 +1058,7 @@ alert('No se pudo cargar el generador de Word. Verificá tu conexión a internet
 return;
 }
 try{
-const children = buildBiodataDocxChildren();
+const children = await buildBiodataDocxChildren();
 const doc = new Document({
 styles: DOC_STYLES,
 sections:[{ properties:{ page: pageSetup() }, footers:{ default: docxFooter() }, children }]
