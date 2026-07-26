@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sinergia Educativa · Armado de CV Docente</title>
+<script src="index.umd.js"></script>
 <style>
 :root{
 --ink:#EDE7DA;
@@ -119,12 +120,12 @@ padding:7px 11px; border-radius:5px; cursor:pointer;
 }
 .step-btn.active{border-color:var(--gold); color:var(--gold);}
 .preview-doc{
-background:#fdfaf3; color:#221d14; padding:36px; border-radius:6px; font-family:Georgia,serif;
-max-height:70vh; overflow-y:auto;
+background:#fdfaf3; color:#221d14; padding:36px; border-radius:6px; font-family:Arial,Helvetica,sans-serif;
+max-height:70vh; overflow-y:auto; line-height:1.5;
 }
 .preview-doc h1{color:#8a4a1f; font-size:22px; border-bottom:2px solid #D9A441; padding-bottom:6px;}
-.preview-doc h2{color:#8a4a1f; font-size:15px; border-bottom:1px solid #D9A441; padding-bottom:3px; margin-top:20px; font-family:Georgia,serif;}
-.preview-doc p{font-size:13px; margin:3px 0;}
+.preview-doc h2{color:#8a4a1f; font-size:15px; border-bottom:1px solid #D9A441; padding-bottom:3px; margin-top:20px; font-family:Arial,Helvetica,sans-serif;}
+.preview-doc p{font-size:13px; margin:3px 0; text-align:justify;}
 .preview-doc .cesado{color:#7a7166;}
 .order-row{
 display:flex; align-items:center; gap:10px; border:1px solid var(--line); border-radius:5px;
@@ -701,7 +702,7 @@ c.innerHTML = `
 <div class="btn-row">
 <button class="btn btn-primary" onclick="descargarWordFormal()">Descargar CV en Word</button>
 </div>
-<div class="privacy">El Word generado no lleva ningún logo. Es una versión editable (formato HTML-en-Word) — si tu procesador de textos avisa "abrir de todos modos", es normal, solo aceptalo.</div>
+<div class="privacy">El Word generado no lleva ningún logo. Se descarga en formato .docx estándar, compatible con Word y Google Docs, tanto en computadora como en el celular.</div>
 </div>`;
 document.getElementById('preview-doc').innerHTML = buildFormalHTML(true);
 }
@@ -752,38 +753,165 @@ html += `<h2>${esc(cs.titulo||'Sección propia')}</h2>` + cs.items.filter(i=>i.t
 });
 return html;
 }
-function descargarWordFormal(){
-const bodyHtml = buildFormalHTML(false);
+/* --- Generación de Word real (.docx) --- */
+const { Document, Packer, Paragraph, TextRun, AlignmentType, Footer, PageNumber, BorderStyle, ImageRun } = docx;
+
+// A4 en twips (1 cm = 566.9 twips) y márgenes simétricos de 2,5 cm
+const A4_WIDTH = 11906, A4_HEIGHT = 16838, MARGIN = 1417;
+const DOC_STYLES = {
+default:{
+document:{
+run:{ font:'Arial', size:22, color:'221D14' },
+paragraph:{ spacing:{ line:360 } } // interlineado 1,5
+}
+}
+};
+function pageSetup(){
+return { size:{ width:A4_WIDTH, height:A4_HEIGHT }, margin:{ top:MARGIN, bottom:MARGIN, left:MARGIN, right:MARGIN } };
+}
+
+function docxTitle(text){
+return new Paragraph({
+spacing:{ after:160, line:360 },
+border:{ bottom:{ style: BorderStyle.SINGLE, size:10, color:"D9A441", space:4 } },
+children:[ new TextRun({ text, bold:true, color:"8A4A1F", size:36, font:'Arial' }) ]
+});
+}
+function docxHeading(text){
+return new Paragraph({
+spacing:{ before:240, after:120, line:360 },
+border:{ bottom:{ style: BorderStyle.SINGLE, size:6, color:"D9A441", space:2 } },
+children:[ new TextRun({ text, bold:true, color:"8A4A1F", size:26, font:'Arial' }) ]
+});
+}
+function docxPara(runsOrText, opts={}){
+const children = Array.isArray(runsOrText) ? runsOrText : [ new TextRun({ text: runsOrText||'', size:22, font:'Arial', color: opts.muted?'666666':'221D14', italics:!!opts.italics }) ];
+return new Paragraph({ spacing:{ after:60, line:360 }, alignment: AlignmentType.JUSTIFIED, children });
+}
+function boldLabel(label, value){
+return new Paragraph({ spacing:{after:60, line:360}, alignment: AlignmentType.JUSTIFIED, children:[
+new TextRun({ text: label+': ', bold:true, size:22, font:'Arial', color:'221D14' }),
+new TextRun({ text: value||'', size:22, font:'Arial', color:'221D14' })
+]});
+}
+function docxFooter(){
+return new Footer({
+children:[ new Paragraph({ alignment: AlignmentType.CENTER, children:[
+new TextRun({ text:'Página ', size:18, font:'Arial', color:'888888' }),
+new TextRun({ children:[PageNumber.CURRENT], size:18, font:'Arial', color:'888888' })
+]}) ]
+});
+}
+function dataUrlToImageRun(dataUrl, size){
+try{
+const match = dataUrl.match(/^data:image\/(\w+);base64,(.*)$/);
+if(!match) return null;
+let ext = match[1].toLowerCase();
+if(ext==='jpeg') ext='jpg';
+if(!['jpg','png','gif','bmp'].includes(ext)) ext='png';
+const base64 = match[2];
+const raw = atob(base64);
+const bytes = new Uint8Array(raw.length);
+for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+return new ImageRun({ data:bytes, type:ext, transformation:{ width:size, height:size } });
+}catch(e){ return null; }
+}
+
+function buildFormalDocxChildren(){
 const dp = formalState.datosPersonales;
-const fullDoc = `
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><title>CV</title>
-<style>
-@page Section1 { mso-footer:f1; }
-div.Section1 { page:Section1; }
-body{font-family:Calibri,Arial,sans-serif; font-size:11pt; color:#221d14;}
-h1{color:#8a4a1f; font-size:18pt; border-bottom:2px solid #D9A441; padding-bottom:4pt;}
-h2{color:#8a4a1f; font-size:13pt; border-bottom:1px solid #D9A441; padding-bottom:2pt; margin-top:16pt;}
-h3{font-size:11.5pt; color:#8a4a1f;}
-p{margin:3pt 0;}
-.muted{color:#666;}
-.cesado{color:#777;}
-</style>
-</head>
-<body>
-<div style='mso-element:footer' id=f1>
-<p style='text-align:center;font-size:9pt;color:#888;'>Página <span style='mso-field-code:PAGE'></span></p>
-</div>
-<div class="Section1">
-${bodyHtml}
-</div>
-</body></html>`;
-const blob = new Blob(['\ufeff', fullDoc], {type:'application/msword'});
+const nivelLabel = formalState.nivel==='sup' ? 'Nivel Superior no universitario' : 'Inicial / Primaria / Secundaria';
+const children = [];
+children.push(docxTitle('CURRICULUM VITAE'));
+children.push(docxPara(nivelLabel, {muted:true, italics:true}));
+children.push(docxHeading('Datos personales'));
+children.push(boldLabel('Apellido y nombre', dp.nombre));
+children.push(boldLabel('DNI', dp.dni));
+children.push(boldLabel('Fecha de nacimiento', dp.nacimiento));
+children.push(boldLabel('Nacionalidad', dp.nacionalidad));
+children.push(boldLabel('Domicilio', dp.domicilio));
+children.push(boldLabel('Teléfono', dp.telefono));
+children.push(boldLabel('Email', dp.email));
+
+formalState.order.forEach(key=>{
+if(key==='titulos' && formalState.titulos.length){
+children.push(docxHeading(SECTION_LABELS.titulos));
+formalState.titulos.forEach(t=>{
+let text = t.nombre||'';
+if(t.institucion) text += ', '+t.institucion;
+if(t.fecha) text += '. '+t.fecha;
+if(t.registroCGE) text += '. Registro CGE: '+t.registroCGE;
+if(t.otroRegistro) text += '. '+t.otroRegistro;
+children.push(docxPara(text));
+});
+}
+if(key==='antiguedad' && formalState.antiguedad.length){
+children.push(docxHeading(SECTION_LABELS.antiguedad));
+formalState.antiguedad.forEach(a=>{
+children.push(docxPara([
+new TextRun({text:(a.nivel||'')+': ', bold:true, size:22, color:'221D14'}),
+new TextRun({text:`${a.anios||0} años, ${a.meses||0} meses, ${a.dias||0} días ${a.corte?'('+a.corte+')':''}`, size:22, color:'221D14'})
+]));
+});
+}
+if(key==='actuacion' && formalState.actuacion.length){
+const activos = formalState.actuacion.filter(a=>a.estado==='activo');
+const cesados = formalState.actuacion.filter(a=>a.estado==='cesado');
+children.push(docxHeading(SECTION_LABELS.actuacion));
+if(activos.length){
+children.push(docxPara('En actividad', {italics:true}));
+activos.forEach(a=> children.push(docxPara(`${a.cargo}, ${a.institucion}, desde ${a.desde} y continúa. ${a.detalle||''}`)));
+}
+if(cesados.length){
+children.push(docxPara('Cargos históricos', {italics:true}));
+cesados.forEach(a=> children.push(docxPara(`${a.cargo}, ${a.institucion}, desde ${a.desde} hasta ${a.hasta}. ${a.detalle||''}`, {muted:true})));
+}
+}
+if(key==='formacion' && formalState.formacion.length){
+children.push(docxHeading(SECTION_LABELS.formacion));
+formalState.formacion.filter(f=>f.tipo!=='jerarquico').forEach(f=>{
+const recLabel = f.resolucion ? `reconocido por Resol. ${f.resolucion}` : (f.reconocimiento==='oficial_convenio' ? 'institución oficial/convenio' : '');
+let text = f.denominacion||'';
+if(recLabel) text += ', '+recLabel;
+if(f.horas) text += '. Carga '+f.horas+' hs cátedra';
+if(f.fecha) text += '. '+f.fecha;
+text += '.';
+children.push(docxPara(text));
+});
+const jerarquicos = formalState.formacion.filter(f=>f.tipo==='jerarquico');
+if(jerarquicos.length){
+children.push(docxPara('Antecedentes de gestión / cargos jerárquicos', {italics:true}));
+jerarquicos.forEach(f=> children.push(docxPara(`${f.denominacion}${f.fecha?'. '+f.fecha:''}.`)));
+}
+}
+const cs = formalState.customSections.find(x=>x.id===key);
+if(cs && cs.items.some(i=>i.text)){
+children.push(docxHeading(cs.titulo||'Sección propia'));
+cs.items.filter(i=>i.text).forEach(i=> children.push(docxPara(i.text)));
+}
+});
+return children;
+}
+
+async function descargarWordFormal(){
+if(typeof docx === 'undefined'){
+alert('No se pudo cargar el generador de Word. Verificá tu conexión a internet e intentá de nuevo.');
+return;
+}
+const dp = formalState.datosPersonales;
+try{
+const doc = new Document({
+styles: DOC_STYLES,
+sections:[{ properties:{ page: pageSetup() }, footers:{ default: docxFooter() }, children: buildFormalDocxChildren() }]
+});
+const blob = await Packer.toBlob(doc);
 const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
-a.href = url; a.download = `CV_${(dp.nombre||'docente').replace(/[^a-zA-Z0-9]+/g,'_')}.doc`;
+a.href = url; a.download = `CV_${(dp.nombre||'docente').replace(/[^a-zA-Z0-9]+/g,'_')}.docx`;
 document.body.appendChild(a); a.click(); document.body.removeChild(a);
 URL.revokeObjectURL(url);
+}catch(e){
+alert('Ocurrió un problema al generar el Word. Probá de nuevo; si persiste, avisá a Sinergia Educativa.');
+}
 }
 /* ============ BIODATA MODE ============ */
 let biodataState = {
@@ -878,33 +1006,56 @@ c.innerHTML = `
 <h2>Vista previa</h2>
 <div class="preview-doc" id="bio-preview-doc"></div>
 <div class="btn-row"><button class="btn btn-primary" onclick="descargarWordBiodata()">Descargar en Word</button></div>
-<div class="privacy">Sin logos. Formato Word editable.</div>
+<div class="privacy">Sin logos. Se descarga en formato .docx estándar, compatible con Word y Google Docs, tanto en computadora como en el celular.</div>
 </div>`;
 document.getElementById('bio-preview-doc').innerHTML = buildBiodataHTML();
 }
-function descargarWordBiodata(){
-const bodyHtml = buildBiodataHTML();
-const fullDoc = `
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><title>Biodata</title>
-<style>
-@page Section1 { mso-footer:f1; }
-div.Section1 { page:Section1; }
-body{font-family:Calibri,Arial,sans-serif; font-size:11pt; color:#221d14;}
-h1{color:#8a4a1f; font-size:20pt;}
-h2{color:#8a4a1f; font-size:13pt; border-bottom:1px solid #D9A441; padding-bottom:2pt; margin-top:16pt;}
-p{margin:3pt 0;}
-</style></head>
-<body>
-<div style='mso-element:footer' id=f1><p style='text-align:center;font-size:9pt;color:#888;'>Página <span style='mso-field-code:PAGE'></span></p></div>
-<div class="Section1">${bodyHtml}</div>
-</body></html>`;
-const blob = new Blob(['\ufeff', fullDoc], {type:'application/msword'});
+function buildBiodataDocxChildren(){
+const children = [];
+if(biodataState.foto){
+const img = dataUrlToImageRun(biodataState.foto, 110);
+if(img){ children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing:{after:100}, children:[img] })); }
+}
+children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing:{after:160}, children:[ new TextRun({text: biodataState.nombre||'', bold:true, size:32, font:'Arial', color:'8A4A1F'}) ] }));
+if(biodataState.sobreMi){
+children.push(docxHeading('Sobre mí'));
+children.push(docxPara(biodataState.sobreMi));
+}
+biodataState.groups.forEach(g=>{
+if(g.items.some(i=>i.text)){
+children.push(docxHeading(g.titulo||'Experiencia'));
+g.items.filter(i=>i.text).forEach(i=> children.push(docxPara(i.text)));
+}
+});
+if(biodataState.linkExtendido){
+children.push(docxPara([
+new TextRun({text:'Para ampliar el CV, consultar: ', size:22, color:'221D14'}),
+new TextRun({text: biodataState.linkExtendido, size:22, color:'1155CC', underline:{}})
+]));
+}
+return children;
+}
+
+async function descargarWordBiodata(){
+if(typeof docx === 'undefined'){
+alert('No se pudo cargar el generador de Word. Verificá tu conexión a internet e intentá de nuevo.');
+return;
+}
+try{
+const children = buildBiodataDocxChildren();
+const doc = new Document({
+styles: DOC_STYLES,
+sections:[{ properties:{ page: pageSetup() }, footers:{ default: docxFooter() }, children }]
+});
+const blob = await Packer.toBlob(doc);
 const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
-a.href = url; a.download = `Biodata_${(biodataState.nombre||'docente').replace(/[^a-zA-Z0-9]+/g,'_')}.doc`;
+a.href = url; a.download = `Biodata_${(biodataState.nombre||'docente').replace(/[^a-zA-Z0-9]+/g,'_')}.docx`;
 document.body.appendChild(a); a.click(); document.body.removeChild(a);
 URL.revokeObjectURL(url);
+}catch(e){
+alert('Ocurrió un problema al generar el Word. Probá de nuevo; si persiste, avisá a Sinergia Educativa.');
+}
 }
 /* ============ UTIL ============ */
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
